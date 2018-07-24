@@ -1,0 +1,26 @@
+{
+  "name": "hgtunnel3",
+  "version": "0.1.0",
+  "description": "tcp tunnel via http-GET/POST",
+  "homepage": "http://github.com/rdrdprgrmr/hgtunnel3",
+  "author": "<rtrdprgrmr@yahoo.co.jp>",
+  "license": "MIT",
+  "keywords": [
+    "Node.js",
+    "tunnel"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rtrdprgrmr/hgtunnel3.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rtrdprgrmr/hgtunnel3/issues"
+  },
+  "engines": {
+    "node": ">= 6.0.0"
+  },
+  "main": "server.js",
+  "dependencies": {},
+  "devDependencies": {},
+  "directories": {}
+}
