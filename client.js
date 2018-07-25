@@ -74,9 +74,22 @@ net.createServer(function(sock) {
         if (sock.destroyed) return
         xid = res.headers['x-id']
         console.log("connection open " + xid)
-        kick_up()
         recv_dn()
+        kick_up()
     })
+
+    function recv_dn() {
+        http_request('GET', { 'x-id': xid }, res => {
+            if (res.statusCode != 200) sock.destroy()
+            if (sock.destroyed) return
+            if (res.headers['x-close']) {
+                res.pipe(sock)
+                return
+            }
+            res.pipe(sock, { end: false })
+            res.on('end', recv_dn)
+        })
+    }
 
     sock.on('data', data => {
         if (data.length == 0) return
@@ -118,15 +131,6 @@ net.createServer(function(sock) {
         http_request('POST', headers, data, res => {
             if (headers['x-close']) return
             send_up()
-        })
-    }
-
-    function recv_dn() {
-        http_request('GET', { 'x-id': xid }, res => {
-            if (res.statusCode != 200) sock.destroy()
-            if (sock.destroyed) return
-            res.pipe(sock, { end: false })
-            res.on('end', recv_dn)
         })
     }
 

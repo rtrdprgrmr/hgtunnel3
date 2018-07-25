@@ -18,8 +18,8 @@ var to_host = process.argv[2] || '127.0.0.1'
 var to_port = +process.argv[3] || 22
 
 http.createServer((req, res) => {
-    var sid = req.headers['x-id']
-    if (sid == null) {
+    var xid = req.headers['x-id']
+    if (xid == null) {
         res.statusCode = 503
         res.setHeader('content-type', "text/html")
         res.write("<html><body><pre>" +
@@ -29,24 +29,18 @@ http.createServer((req, res) => {
         res.end()
         return
     }
-    if (sid == 0) {
+    if (xid == 0) {
         var sess = new Session()
-        res.setHeader('x-id', sess.sid)
         sess.connect(req, res)
         return
     }
-    var sess = sessions[sid]
+    var sess = sessions[xid]
     if (!sess) {
         res.statusCode = 404
         res.end()
         return
     }
     sess.idle = 0
-    if (req.headers['x-close']) {
-        sess.close()
-        res.statusCode = 200
-        res.end()
-    }
     if (req.method == 'GET') {
         sess.handle_dn(req, res)
     }
@@ -57,105 +51,113 @@ http.createServer((req, res) => {
 
 var sessions = {}
 
-class Session {
-    constructor() {
-        var sid = String(Math.random())
-        sessions[sid] = this
-        this.sid = sid
-        this.idle = 0
-        console.log("new session " + sid)
+function Session() {
+    this.idle = 0
+
+    var xid = String(Math.random())
+    sessions[xid] = this
+    console.log("new session " + xid)
+
+    var sock
+    var pending = []
+    var pending_length = 0
+    var closed = false
+    var kicking = false
+    var dn_res
+
+    this.handle_up = (req, res) => {
+        req.pipe(sock, { end: false })
+        req.on('end', () => {
+            res.statusCode = 200
+            res.end()
+            if (req.headers['x-close']) {
+                sock.end()
+            }
+        })
     }
 
-    connect(req, res) {
-        this.sock = net.connect(to_port, to_host, () => {
+    this.handle_dn = (req, res) => {
+        dn_res = res
+        if (pending_length > 0) {
+            kick_dn()
+            return
+        }
+        setTimeout(kick_dn, 5000)
+    }
+
+    this.connect = (req, res) => {
+        sock = net.connect(to_port, to_host, () => {
             if (!res.finished) {
+                res.setHeader('x-id', xid)
                 res.statusCode = 200
                 res.end()
             }
+            console.log("session connected " + xid)
         })
-        this.sock.on('error', e => {
+        this.sock = sock
+
+        sock.on('error', e => {
             console.error(e)
             if (!res.finished) {
                 res.statusCode = 404
                 res.end()
             }
+            console.log("session error " + xid)
         })
-        this.sock.on('data', data => this.ondata(data))
-        this.sock.on('end', () => this.close())
-        this.pending = []
-        this.pending_length = 0
-        console.log("start session " + this.sid)
-    }
 
-    close() {
-        console.log("close session " + this.sid)
-        this.sock.destroy()
-        if (this.dn_res && !this.dn_res.finished) {
-            this.dn_res.statusCode = 205
-            this.dn_res.end()
-        }
-    }
+        sock.on('data', data => {
+            if (data.length == 0) return
+            pending.push(data)
+            pending_length += data.length
+            if (pending_length > 1000000) {
+                sock.pause()
+            }
+            kick_dn()
+        })
 
-    handle_up(req, res) {
-        req.pipe(this.sock, { end: false })
-        req.on('end', () => {
-            res.statusCode = 200
-            res.end()
+        sock.on('end', () => {
+            closed = true
+            kick_dn()
         })
     }
 
-    handle_dn(req, res) {
-        this.dn_res = res
-        if (this.pending_length > 0) {
-            this.kick_dn()
-            return
-        }
-        setTimeout(() => this.kick_dn(), 5000)
-    }
-
-    ondata(data) {
-        if (data.length == 0) return
-        this.pending.push(data)
-        this.pending_length += data.length
-        if (this.pending_length > 1000000) {
-            this.sock.pause()
-        }
-        this.kick_dn()
-    }
-
-    kick_dn() {
-        if (!this.dn_res) return
-        if (this.dn_res.finished) return
-        if (this.kicking) return
-        this.kicking = true
+    function kick_dn() {
+        if (!dn_res) return
+        if (dn_res.finished) return
+        if (kicking) return
+        kicking = true
         setTimeout(() => {
-            this.kicking = false
-            this.complete_dn()
+            kicking = false
+            send_dn()
         }, 5)
     }
 
-    complete_dn() {
-        var res = this.dn_res
-        if (res.finished) return
-        res.setHeader('Content-Length', this.pending_length)
-        res.statusCode = 200
-        for (var i = 0; i < this.pending.length; i++) {
-            res.write(this.pending[i])
+    function send_dn() {
+        if (closed) {
+            console.log("session closed " + xid)
+            var headers = { 'x-id': xid, 'x-close': true }
+        } else {
+            var headers = { 'x-id': xid }
         }
-        res.end()
-        this.pending = []
-        this.pending_length = 0
-        this.sock.resume()
+        dn_res.setHeader('Content-Length', pending_length)
+        dn_res.statusCode = 200
+        for (var i = 0; i < pending.length; i++) {
+            dn_res.write(pending[i])
+        }
+        dn_res.end()
+        pending = []
+        pending_length = 0
+        sock.resume()
     }
 }
 
 function patrol() {
-    for (sid in sessions) {
-        var sess = sessions[sid]
-        if (++sess.idle < 10) continue
-        console.log("expiring session " + sid)
-        sess.close()
-        delete(sessions[sid])
+    for (xid in sessions) {
+        var sess = sessions[xid]
+        if (++sess.idle > 10) continue
+        console.log("expiring session " + xid)
+        if (sess.sock) sess.sock.destroy()
+        delete(sessions[xid])
     }
 }
 
