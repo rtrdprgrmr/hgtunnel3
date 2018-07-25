@@ -53,6 +53,7 @@ var sessions = {}
 
 function Session() {
     this.idle = 0
+    this.closed = false
 
     var xid = String(Math.random())
     sessions[xid] = this
@@ -61,7 +62,6 @@ function Session() {
     var sock
     var pending = []
     var pending_length = 0
-    var closed = false
     var kicking = false
     var dn_res
 
@@ -80,10 +80,19 @@ function Session() {
         dn_res = res
         if (pending_length > 0) {
             kick_dn()
-            return
         }
-        setTimeout(kick_dn, 5000)
     }
+
+    (async () => {
+        var prev_dn_res
+        while (!this.closed) {
+            if (prev_dn_res === dn_res) {
+                kick_dn()
+            }
+            await new Promise(resolve => setTimeout(resolve, 5000))
+            prev_dn_res = dn_res
+        }
+    })()
 
     this.connect = (req, res) => {
         sock = net.connect(to_port, to_host, () => {
@@ -116,7 +125,7 @@ function Session() {
         })
 
         sock.on('end', () => {
-            closed = true
+            this.closed = true
             kick_dn()
         })
     }
@@ -133,7 +142,7 @@ function Session() {
     }
 
     function send_dn() {
-        if (closed) {
+        if (this.closed) {
             console.log("session closed " + xid)
             var headers = { 'x-id': xid, 'x-close': true }
         } else {
@@ -154,8 +163,9 @@ function Session() {
 function patrol() {
     for (xid in sessions) {
         var sess = sessions[xid]
-        if (++sess.idle > 10) continue
+        if (++sess.idle < 10) continue
         console.log("expiring session " + xid)
+        sess.closed = true
         if (sess.sock) sess.sock.destroy()
         delete(sessions[xid])
     }
