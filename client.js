@@ -41,13 +41,19 @@ function http_request(method, headers, data, callback) {
         callback = data
         data = []
     }
-    headers['Content-Length'] = data.length
+    var length = 0
+    for (var i = 0; i < data.length; i++) {
+        length += data[i].length
+    }
+    headers['Content-Length'] = length
     headers['Connection'] = 'Keep-Alive'
     headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     headers['Pragma'] = 'no-cache'
     headers['Expires'] = '0'
     var req = http.request({ method, path, host, port, headers }, callback)
-    if (data.length > 0) req.write(data)
+    for (var i = 0; i < data.length; i++) {
+        req.write(data[i])
+    }
     req.end()
     req.on('error', e => {
         console.error(e)
@@ -57,31 +63,63 @@ function http_request(method, headers, data, callback) {
 
 net.createServer(function(sock) {
     var xid
+    var pending = []
+    var pending_length = 0
+    var closed = false
+    var kicking = false
     sock.on('error', console.error)
-    sock.pause()
+
     http_request('GET', { 'x-id': '0' }, res => {
         if (res.statusCode != 200) sock.destroy()
         if (sock.destroyed) return
         xid = res.headers['x-id']
         console.log("connection open " + xid)
-        sock.resume()
+        kick_up()
         recv_dn()
     })
+
     sock.on('data', data => {
-        sock.pause()
-        http_request('POST', { 'x-id': xid }, data, res => {
-            if (res.statusCode != 200) sock.destroy()
-            if (sock.destroyed) return
-            sock.resume()
-        })
+        if (data.length == 0) return
+        pending.push(data)
+        pending_length += data.length
+        if (pending_length > 1000000) {
+            sock.pause()
+        }
+        kick_up()
     })
+
     sock.on('end', () => {
-        http_request('GET', { 'x-id': xid, 'x-close': true }, res => {
-            console.log("connection closed " + xid)
-            if (res.statusCode != 200) sock.destroy()
-            if (sock.destroyed) return
-        })
+        closed = true
+        kick_up()
     })
+
+    function kick_up() {
+        if (!xid) return
+        if (kicking) return
+        kicking = true
+        setTimeout(send_up, 1)
+    }
+
+    function send_up() {
+        if (pending_length == 0 && !closed) {
+            kicking = false
+            return
+        }
+        if (closed) {
+            console.log("connection closed " + xid)
+            var headers = { 'x-id': xid, 'x-close': true }
+        } else {
+            var headers = { 'x-id': xid }
+        }
+        var data = pending
+        pending = []
+        pending_length = 0
+        sock.resume()
+        http_request('POST', headers, data, res => {
+            if (headers['x-close']) return
+            send_up()
+        })
+    }
 
     function recv_dn() {
         http_request('GET', { 'x-id': xid }, res => {
@@ -91,4 +129,5 @@ net.createServer(function(sock) {
             res.on('end', recv_dn)
         })
     }
+
 }).listen(local_port)

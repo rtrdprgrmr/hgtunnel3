@@ -131,7 +131,7 @@ class Session {
         setTimeout(() => {
             this.kicking = false
             this.complete_dn()
-        }, 1)
+        }, 5)
     }
 
     complete_dn() {
