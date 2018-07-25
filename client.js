@@ -46,7 +46,7 @@ function http_request(method, headers, data, callback) {
     headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     headers['Pragma'] = 'no-cache'
     headers['Expires'] = '0'
-    var req = http.request({method, path, host, port, headers }, callback)
+    var req = http.request({ method, path, host, port, headers }, callback)
     if (data.length > 0) req.write(data)
     req.end()
     req.on('error', e => {

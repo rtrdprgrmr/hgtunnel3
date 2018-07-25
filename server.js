@@ -80,13 +80,20 @@ class Session {
                 res.end()
             }
         })
-        this.sock.pause()
+        this.sock.on('data', data => this.ondata(data))
+        this.sock.on('end', () => this.close())
+        this.pending = []
+        this.pending_length = 0
         console.log("start session " + this.sid)
     }
 
     close() {
-        this.sock.destroy()
         console.log("close session " + this.sid)
+        this.sock.destroy()
+        if (this.dn_res && !this.dn_res.finished) {
+            this.dn_res.statusCode = 205
+            this.dn_res.end()
+        }
     }
 
     handle_up(req, res) {
@@ -98,45 +105,54 @@ class Session {
     }
 
     handle_dn(req, res) {
-        var sock = this.sock
-        sock.once('data', data_listener)
-        sock.once('end', end_listener)
-        sock.resume()
-        setTimeout(poll_listener, 5000)
-
-        function data_listener(data) {
-            if (res.finished) return
-            sock.pause()
-            sock.removeListener('end', end_listener)
-            res.setHeader('Content-Length', data.length)
-            res.statusCode = 200
-            res.write(data)
-            res.end()
+        this.dn_res = res
+        if (this.pending_length > 0) {
+            this.kick_dn()
+            return
         }
+        setTimeout(() => this.kick_dn(), 5000)
+    }
 
-        function end_listener() {
-            if (res.finished) return
-            res.statusCode = 205
-            res.end()
+    ondata(data) {
+        if (data.length == 0) return
+        this.pending.push(data)
+        this.pending_length += data.length
+        if (this.pending_length > 1000000) {
+            this.sock.pause()
         }
+        this.kick_dn()
+    }
 
-        function poll_listener() {
-            if (res.finished) return
-            sock.pause()
-            sock.removeListener('data', data_listener)
-            sock.removeListener('end', end_listener)
-            res.setHeader('Content-Length', 0)
-            res.statusCode = 200
-            res.end()
+    kick_dn() {
+        if (!this.dn_res) return
+        if (this.dn_res.finished) return
+        if (this.kicking) return
+        this.kicking = true
+        setTimeout(() => {
+            this.kicking = false
+            this.complete_dn()
+        }, 1)
+    }
+
+    complete_dn() {
+        var res = this.dn_res
+        if (res.finished) return
+        res.setHeader('Content-Length', this.pending_length)
+        res.statusCode = 200
+        for (var i = 0; i < this.pending.length; i++) {
+            res.write(this.pending[i])
         }
+        res.end()
+        this.pending = []
+        this.pending_length = 0
+        this.sock.resume()
     }
 }
 
 function patrol() {
     for (sid in sessions) {
         var sess = sessions[sid]
-        sess.idle++
-            if (sess.idle < 10) continue
+        if (++sess.idle < 10) continue
         console.log("expiring session " + sid)
         sess.close()
         delete(sessions[sid])
